@@ -44,25 +44,52 @@ def split_audio_into_chunks(audio_data, sr, chunk_duration=10):
 
 def process_chunk(chunk_data, model, chunk_info, chunk_index):
     """Process a single audio chunk"""
+    tmp_file_path = None
     try:
-        # Create temporary file for this chunk
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, chunk_data, 16000, format='WAV')
-            
-            # Process with model
-            result = model(tmp_file.name, return_timestamps=True)
-            
-            # Clean up
-            os.unlink(tmp_file.name)
-            
-            return {
-                'chunk_index': chunk_index,
-                'start_time': chunk_info['start_time'],
-                'end_time': chunk_info['end_time'],
-                'text': result['text'],
-                'success': True
-            }
+        # Create temporary file for this chunk with explicit delete=False
+        tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_file_path = tmp_file.name
+        
+        # Write audio data and close file handle
+        sf.write(tmp_file_path, chunk_data, 16000, format='WAV')
+        tmp_file.close()  # Explicitly close the file handle
+        
+        # Small delay to ensure file is written (Windows fix)
+        time.sleep(0.1)
+        
+        # Process with model
+        result = model(tmp_file_path, return_timestamps=True)
+        
+        # Clean up with retry mechanism for Windows
+        max_retries = 5
+        for i in range(max_retries):
+            try:
+                if os.path.exists(tmp_file_path):
+                    os.unlink(tmp_file_path)
+                break
+            except (OSError, PermissionError) as cleanup_error:
+                if i == max_retries - 1:
+                    # If we can't delete after all retries, log but don't fail
+                    print(f"Warning: Could not delete temporary file {tmp_file_path}: {cleanup_error}")
+                else:
+                    time.sleep(0.2)  # Wait before retry
+        
+        return {
+            'chunk_index': chunk_index,
+            'start_time': chunk_info['start_time'],
+            'end_time': chunk_info['end_time'],
+            'text': result['text'],
+            'success': True
+        }
     except Exception as e:
+        # Ensure cleanup even on error
+        if tmp_file_path and os.path.exists(tmp_file_path):
+            try:
+                time.sleep(0.2)
+                os.unlink(tmp_file_path)
+            except:
+                pass  # Ignore cleanup errors on main error
+        
         return {
             'chunk_index': chunk_index,
             'start_time': chunk_info['start_time'],  
@@ -321,9 +348,11 @@ if audio_option == 'Record Audio':
             - Duration: {duration:.2f} seconds
             """)
 
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                sf.write(tmp_file.name, audio_data, sr, format='WAV')
-                tmp_file_path = tmp_file.name
+            # Create temporary file for processing with proper Windows handling
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            tmp_file_path = tmp_file.name
+            sf.write(tmp_file_path, audio_data, sr, format='WAV')
+            tmp_file.close()  # Close file handle before processing
 
             st.subheader("🔄 Audio Conversion Status")
             
@@ -366,10 +395,21 @@ if audio_option == 'Record Audio':
                             else:
                                 st.error(f"[{chunk['start_time']:.1f}s - {chunk['end_time']:.1f}s]: {chunk['text']}")
 
+            # Clean up temporary file with retry mechanism for Windows
             try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
+                max_retries = 5
+                for i in range(max_retries):
+                    try:
+                        if os.path.exists(tmp_file_path):
+                            os.unlink(tmp_file_path)
+                        break
+                    except (OSError, PermissionError):
+                        if i == max_retries - 1:
+                            st.warning(f"Could not delete temporary file: {tmp_file_path}")
+                        else:
+                            time.sleep(0.2)  # Wait before retry
+            except Exception as cleanup_error:
+                st.warning(f"Cleanup warning: {cleanup_error}")
 
 # Option 2: Upload audio
 elif audio_option == 'Upload Audio':
@@ -391,9 +431,11 @@ elif audio_option == 'Upload Audio':
 
         st.audio(audio_file, format=f'audio/{audio_file.type.split("/")[-1]}')
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sr, format='WAV')
-            tmp_file_path = tmp_file.name
+        # Create temporary file with proper Windows handling
+        tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_file_path = tmp_file.name
+        sf.write(tmp_file_path, audio_data, sr, format='WAV')
+        tmp_file.close()  # Close file handle before processing
             
         if st.button("🚀 Start Conversion", type="primary"):
             st.subheader("🔄 Audio Conversion Status")
@@ -444,10 +486,21 @@ elif audio_option == 'Upload Audio':
                             else:
                                 st.error(f"[{chunk['start_time']:.1f}s - {chunk['end_time']:.1f}s]: {chunk['text']}")
 
+        # Clean up temporary file with retry mechanism for Windows
         try:
-            os.unlink(tmp_file_path)
-        except:
-            pass
+            max_retries = 5
+            for i in range(max_retries):
+                try:
+                    if os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
+                    break
+                except (OSError, PermissionError):
+                    if i == max_retries - 1:
+                        st.warning(f"Could not delete temporary file: {tmp_file_path}")
+                    else:
+                        time.sleep(0.2)  # Wait before retry
+        except Exception as cleanup_error:
+            st.warning(f"Cleanup warning: {cleanup_error}")
 
 else:
     st.write("Please select an audio input option.")
