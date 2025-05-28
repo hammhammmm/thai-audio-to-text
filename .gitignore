@@ -1,2 +1,4 @@
 *.mp3
 now_transcription.txt
+*_transcription.txt
+whisper_*.txt
